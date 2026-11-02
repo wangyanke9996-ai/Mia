@@ -10,7 +10,7 @@ const preferences = {sound:true,voice:'recorded',font:1};
 try {const v=JSON.parse(localStorage.getItem('xh_settings')||'{}'); if(typeof v.sound==='boolean')preferences.sound=v.sound;if(['recorded','system'].includes(v.voice))preferences.voice=v.voice;if([1,1.1,1.2].includes(v.font))preferences.font=v.font;}catch(_){}
 const VOICE_TEXT = {"vo_menu":"你好呀，我是小禾！欢迎来到我的校园安全日。和我一起，学会保护自己吧！","vo_lv1":"走廊里要慢慢走。看到地上的水，绕开它。","vo_lv2":"下楼梯，扶着扶手，一级一级走。","vo_lv3":"门口有个陌生人，说是妈妈让他来接你。该怎么办呢？","vo_lv4":"教室里藏着三处危险，把它们找出来。","vo_lv5":"警报响了！跟着绿色出口牌，到操场集合。","vo_win":"做得对！你记住了这个安全习惯。","vo_retry":"差一点点，我们再来一次。","vo_l2_intro":"要下楼啦。前面有小伙伴，我们怎样走，才能更安全呢？","vo_l2_grab":"下楼前，我们的小手，可以扶住哪里呢？","vo_l2_grab2":"试着点一点旁边的扶手。","vo_l2_ready":"扶好啦，我们出发吧！","vo_l2_step":"看着脚下，一步一步下楼梯。","vo_l2_steptap":"点一点台阶，我们慢慢往下走。","vo_l2_stop":"前面的小伙伴停下来了。","vo_l2_oh":"咦，前面的小伙伴停下来了。","vo_l2_thanks":"谢谢你等我！","vo_l2_waitok":"前面有人时，留出一点距离，不推，也不挤。","vo_l2_squeeze":"这里有点挤。先停一停，等前面的小伙伴走了，再下去吧。","vo_l2_arrive":"我们安全到楼下啦！","vo_l2_end":"下楼梯，扶扶手，看台阶，慢慢走，不推挤。","vo_l4_cup":"水杯放在桌边容易碰倒，水洒在地上会让人滑倒。要把水杯放稳、放里面。","vo_l4_scissors":"剪刀的尖头朝外，容易扎伤经过的小朋友。用完剪刀，要把它合拢，收进文具盒。","vo_l4_bag":"书包放在过道上，容易绊倒小朋友。要把书包收好，保持过道畅通。","vo_l3_retry_anna":"不认识的人说是爸爸妈妈让他来接你，也不能直接跟他走哦！先留在校园里，找老师帮忙确认。我们再试一次，这次你会怎么做呢？","vo_l3_stay_anna":"没有跟陌生人走，做得对！不过，一个人站在这里还不够安全。留在校园里，找老师帮忙确认吧！","vo_l4_books_anna":"书本散落在过道上，容易绊倒小朋友。把书放回书架，保持过道畅通。","vo_l4_water_anna":"地面有积水，走过去容易滑倒。先绕开积水，告诉老师来处理。","vo_l4_exit_anna":"纸箱堵住出口，紧急时会挡住撤离的路。告诉老师清理杂物，出口要保持畅通。"};
 function savePreferences(){try{localStorage.setItem('xh_settings',JSON.stringify(preferences));}catch(_){} }
-function stopSound(){for(const a of Object.values(AUD))a.pause();if('speechSynthesis' in window)speechSynthesis.cancel();}
+function stopSound(){for(const a of Object.values(AUD))a.pause();if(voiced)voiced.pause();blockedNarration=false;narrationAttempt++;retryNarrationButton.style.display='none';if('speechSynthesis' in window)speechSynthesis.cancel();}
 
 const PAL = { cream: "#FDF6EC", coral: "#E8503A", teal: "#06B29D", yellow: "#F7C948", navy: "#1F345E", ink: "#2B3A55" };
 
@@ -83,6 +83,24 @@ function loadAll() {
 
 // 浏览器通常要求用户先点按页面，才能开始播放声音。
 let audioUnlocked = false, pendingVoice = null, voiced = null;
+// Reuse the gesture-unlocked media element for every recorded narration on phones.
+const narrationPlayer = new Audio();
+narrationPlayer.preload = 'auto';
+let narrationKey = null, narrationAttempt = 0, blockedNarration = false;
+const retryNarrationButton = document.createElement('button');
+retryNarrationButton.textContent = '点击播放语音';
+retryNarrationButton.style.cssText = 'display:none;position:fixed;right:16px;bottom:16px;z-index:20;border:2px solid #ffd49a;border-radius:24px;padding:12px 20px;background:#fff6e5;color:#183451;font:bold 18px sans-serif';
+document.body.appendChild(retryNarrationButton);
+function startNarration() {
+  const attempt = ++narrationAttempt;
+  blockedNarration = false;
+  retryNarrationButton.style.display = 'none';
+  const failed = () => { if(attempt!==narrationAttempt || !preferences.sound)return; blockedNarration=true;retryNarrationButton.style.display='block'; };
+  try { const p=narrationPlayer.play();if(p)p.catch(failed); } catch (_) { failed(); }
+}
+retryNarrationButton.addEventListener('click',()=>{if(!preferences.sound)return; narrationPlayer.load();startNarration();});
+narrationPlayer.addEventListener('error',()=>{if(preferences.sound&&narrationKey){blockedNarration=true;retryNarrationButton.style.display='block';}});
+document.addEventListener('pointerdown',()=>{if(blockedNarration&&preferences.sound)startNarration();},{capture:true});
 function playAudio(a) {
   if (!a || !preferences.sound) return;
   try { a.currentTime = 0; const promise = a.play(); if (promise && promise.catch) promise.catch(err => console.warn("声音播放受阻", err.name)); }
@@ -95,7 +113,11 @@ function say(k) {
   if (!AUD[k]) return;
   if (!audioUnlocked) { pendingVoice = k; return; }
   if (voiced) { try { voiced.pause(); } catch (_) {} }
-  voiced = AUD[k]; playAudio(voiced);
+  narrationKey = k;
+  narrationPlayer.src = AUD[k].src;
+  narrationPlayer.volume = .95;
+  voiced = narrationPlayer;
+  startNarration();
 }
 function unlockAudio() {
   if (audioUnlocked) return;
@@ -222,6 +244,7 @@ function hit(x, y, bx, by, bw, bh) { return x >= bx && x <= bx + bw && y >= by &
 let activeVideo = null; let pausedNarration = null;
 let scene = { name: "load" };
 function go(name, arg) {
+  blockedNarration=false;narrationAttempt++;retryNarrationButton.style.display='none';
   const prev = scene.name;
   if(activeVideo){activeVideo.pause();activeVideo=null;} pausedNarration=null;
   if("speechSynthesis" in window) speechSynthesis.cancel();
@@ -624,7 +647,7 @@ SCENES.l2 = () => {
   // 旁白跟随当前操作阶段，不排队补播已过时的操作提示。
   let walkHintSpoken = false;
   let safetyVoice = null;
-  const safetySpeaking = () => safetyVoice && !safetyVoice.paused && !safetyVoice.ended && !safetyVoice.error;
+  const safetySpeaking = () => preferences.sound && (blockedNarration || (safetyVoice && !safetyVoice.paused && !safetyVoice.ended && !safetyVoice.error));
   function narrate(key) {
     if (key === 'vo_l2_steptap' || safetySpeaking()) return;
     if (key === 'vo_l2_step') {
@@ -632,7 +655,7 @@ SCENES.l2 = () => {
       walkHintSpoken = true;
     }
     say(key);
-    if (["vo_l2_step", "vo_l2_waitok", "vo_l2_squeeze", "vo_l2_end"].includes(key)) safetyVoice = AUD[key];
+    if (["vo_l2_step", "vo_l2_waitok", "vo_l2_squeeze", "vo_l2_end"].includes(key)) safetyVoice = voiced;
   }
   // —— 第二关：扶扶手，一级一级下楼（四段式教学关）——
   // 参考图视角：她在上层平台，沿楼梯往右上走（越走越小、越走越远）
@@ -1154,8 +1177,8 @@ SCENES.l2 = () => {
 
       if (st.done) {
         st.endT += dt;
-        if (st.endT > 1.4 && !st.saidEnd && (!voiced || voiced.paused || voiced.ended || voiced.error)) { st.saidEnd = true; narrate("vo_l2_end"); }
-        if (st.endT > 3.4 && st.saidEnd && !st.finished && (!voiced || voiced.paused || voiced.ended)) {
+        if (st.endT > 1.4 && !st.saidEnd && !blockedNarration && (!voiced || voiced.paused || voiced.ended || voiced.error)) { st.saidEnd = true; narrate("vo_l2_end"); }
+        if (st.endT > 3.4 && st.saidEnd && !st.finished && !blockedNarration && (!voiced || voiced.paused || voiced.ended)) {
           st.finished = true;
           go("win", { id: "l2", line: STR.win2, bg: "bg_stairs4" });
         }
@@ -1462,7 +1485,8 @@ SCENES.l4 = () => {
         ctx.restore();
         const lines=lessons[st.inspect.id].lines;
         lines.forEach((line,i)=>label(line,640,(lines.length===3?461:474)+i*(lines.length===3?37:51),lines.length===3?31:34,820));
-        label(st.found===3?(round===1?'下一轮':'我知道了'):'继续找一找',640,618,39,350,'#fffaf1');
+        const lessonBusy=preferences.sound&&(blockedNarration||(voiced&&!voiced.paused&&!voiced.ended));
+        label(lessonBusy?'正在讲解…':st.found===3?(round===1?'下一轮':'我知道了'):'继续找一找',640,618,39,350,'#fffaf1');
         ctx.restore();
       }
       if (!st.inspect && st.lastText && st.t - st.lastFound < 1.6) {
@@ -1470,7 +1494,7 @@ SCENES.l4 = () => {
       }
     },
     onDown(x, y) {
-      if(st.inspect) { if(st.inspectTime>0.4 && hit(x,y,440,568,400,98))closeLesson(); return; }
+      if(st.inspect) { const busy=preferences.sound&&(blockedNarration||(voiced&&!voiced.paused&&!voiced.ended)); if(st.inspectTime>0.4 && !busy && hit(x,y,440,568,400,98))closeLesson(); return; }
       for (const it of items) {
         if (it.found) continue;
         const dx = Math.abs(x - it.x), dy = Math.abs(y - (it.y - it.h * 0.45));
